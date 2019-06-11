@@ -115,9 +115,4 @@ class ElasticaLogger extends AbstractLogger
     {
         return $this->logger->log($level, $message, $context);
     }
-
-    public function reset()
-    {
-        $this->queries = [];
-    }
 }

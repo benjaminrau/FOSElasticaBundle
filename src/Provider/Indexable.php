@@ -20,12 +20,18 @@
 
 namespace FOS\ElasticaBundle\Provider;
 
+use Symfony\Component\DependencyInjection\ContainerAwareInterface;
+use Symfony\Component\DependencyInjection\ContainerAwareTrait;
 use Symfony\Component\ExpressionLanguage\Expression;
 use Symfony\Component\ExpressionLanguage\ExpressionLanguage;
 use Symfony\Component\ExpressionLanguage\SyntaxError;
+use Symfony\Component\PropertyAccess\PropertyAccess;
+use Symfony\Component\PropertyAccess\PropertyAccessorInterface;
 
-class Indexable implements IndexableInterface
+class Indexable implements IndexableInterface, ContainerAwareInterface
 {
+    use ContainerAwareTrait;
+
     /**
      * An array of raw configured callbacks for all types.
      *
@@ -47,9 +53,20 @@ class Indexable implements IndexableInterface
      */
     private $initialisedCallbacks = [];
 
+    /**
+     * PropertyAccessor instance.
+     *
+     * @var PropertyAccessorInterface
+     */
+    private $propertyAccessor;
+
+    /**
+     * @param array $callbacks
+     */
     public function __construct(array $callbacks)
     {
         $this->callbacks = $callbacks;
+        $this->propertyAccessor = PropertyAccess::createPropertyAccessor();
     }
 
     /**
@@ -87,18 +104,22 @@ class Indexable implements IndexableInterface
      * @param string $type
      * @param object $object
      *
-     * @return callable|string|ExpressionLanguage|null
+     * @return mixed
      */
     private function buildCallback($type, $object)
     {
         if (!array_key_exists($type, $this->callbacks)) {
-            return null;
+            return;
         }
 
         $callback = $this->callbacks[$type];
 
         if (is_callable($callback) or is_callable([$object, $callback])) {
             return $callback;
+        }
+
+        if (is_array($callback) && !is_object($callback[0])) {
+            return $this->processArrayToCallback($type, $callback);
         }
 
         if (is_string($callback)) {
@@ -187,5 +208,39 @@ class Indexable implements IndexableInterface
         $ref = new \ReflectionClass($object);
 
         return strtolower($ref->getShortName());
+    }
+
+    /**
+     * Processes an array into a callback. Replaces the first element with a service if
+     * it begins with an @.
+     *
+     * @param string $type
+     * @param array  $callback
+     *
+     * @return array
+     */
+    private function processArrayToCallback($type, array $callback)
+    {
+        list($class, $method) = $callback + [null, '__invoke'];
+
+        if (0 === strpos($class, '@')) {
+            $service = $this->container->get(substr($class, 1));
+            $callback = [$service, $method];
+
+            if (!is_callable($callback)) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Method "%s" on service "%s" is not callable.',
+                    $method,
+                    substr($class, 1)
+                ));
+            }
+
+            return $callback;
+        }
+
+        throw new \InvalidArgumentException(sprintf(
+            'Unable to parse callback array for type "%s"',
+            $type
+        ));
     }
 }

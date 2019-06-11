@@ -11,41 +11,44 @@
 
 namespace FOS\ElasticaBundle\Command;
 
-use FOS\ElasticaBundle\Configuration\ConfigManager;
-use FOS\ElasticaBundle\Index\AliasProcessor;
 use FOS\ElasticaBundle\Index\IndexManager;
-use FOS\ElasticaBundle\Index\MappingBuilder;
-use Symfony\Component\Console\Command\Command;
+use Symfony\Bundle\FrameworkBundle\Command\ContainerAwareCommand;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
+ * Create command.
+ *
  * @author Oleg Andreyev <oleg.andreyev@intexsys.lv>
  */
-class CreateCommand extends Command
+class CreateCommand extends ContainerAwareCommand
 {
-    protected static $defaultName = 'fos:elastica:create';
-
+    /**
+     * @var IndexManager
+     */
     private $indexManager;
+
+    /**
+     * @var MappingBuilder
+     */
     private $mappingBuilder;
+
+    /**
+     * @var ConfigManager
+     */
     private $configManager;
+
+    /**
+     * Alias processor.
+     *
+     * @var AliasProcessor
+     */
     private $aliasProcessor;
 
-    public function __construct(
-        IndexManager $indexManager,
-        MappingBuilder $mappingBuilder,
-        ConfigManager $configManager,
-        AliasProcessor $aliasProcessor
-    ) {
-        parent::__construct();
-
-        $this->indexManager = $indexManager;
-        $this->mappingBuilder = $mappingBuilder;
-        $this->configManager = $configManager;
-        $this->aliasProcessor = $aliasProcessor;
-    }
-
+    /**
+     * {@inheritdoc}
+     */
     protected function configure()
     {
         $this
@@ -55,6 +58,20 @@ class CreateCommand extends Command
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
+    protected function initialize(InputInterface $input, OutputInterface $output)
+    {
+        $this->indexManager = $this->getContainer()->get('fos_elastica.index_manager');
+        $this->mappingBuilder = $this->getContainer()->get('fos_elastica.mapping_builder');
+        $this->configManager = $this->getContainer()->get('fos_elastica.config_manager');
+        $this->aliasProcessor = $this->getContainer()->get('fos_elastica.alias_processor');
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
         $indexName = $input->getOption('index');

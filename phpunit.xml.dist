@@ -11,8 +11,8 @@
         bootstrap                                  = "vendor/autoload.php"
 >
     <php>
-        <server name="FOS_ELASTICA_HOST" value="localhost" />
-        <server name="FOS_ELASTICA_PORT" value="9200" />
+        <server name="SYMFONY__FOS_ELASTICA__HOST" value="localhost" />
+        <server name="SYMFONY__FOS_ELASTICA__PORT" value="9200" />
     </php>
 
     <testsuites>

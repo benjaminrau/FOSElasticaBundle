@@ -40,6 +40,11 @@ class Index extends BaseIndex
         return $this->originalName ?: $this->_name;
     }
 
+    /**
+     * @param string $type
+     *
+     * @return mixed
+     */
     public function getType($type)
     {
         if (isset($this->typeCache[$type])) {

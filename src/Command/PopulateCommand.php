@@ -24,41 +24,38 @@ use FOS\ElasticaBundle\Persister\InPlacePagerPersister;
 use FOS\ElasticaBundle\Persister\PagerPersisterInterface;
 use FOS\ElasticaBundle\Persister\PagerPersisterRegistry;
 use FOS\ElasticaBundle\Provider\PagerProviderRegistry;
-use Symfony\Component\Console\Command\Command;
+use Symfony\Bundle\FrameworkBundle\Command\ContainerAwareCommand;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Helper\QuestionHelper;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Question\Question;
-use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
 /**
  * Populate the search index.
  */
-class PopulateCommand extends Command
+class PopulateCommand extends ContainerAwareCommand
 {
-    protected static $defaultName = 'fos:elastica:populate';
-
     /**
-     * @var EventDispatcherInterface 
+     * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
      */
     private $dispatcher;
 
     /**
-     * @var IndexManager 
+     * @var IndexManager
      */
     private $indexManager;
+
+    /**
+     * @var ProgressClosureBuilder
+     */
+    private $progressClosureBuilder;
 
     /**
      * @var PagerProviderRegistry
      */
     private $pagerProviderRegistry;
-
-    /**
-     * @var PagerPersisterRegistry
-     */
-    private $pagerPersisterRegistry;
 
     /**
      * @var PagerPersisterInterface
@@ -70,22 +67,9 @@ class PopulateCommand extends Command
      */
     private $resetter;
 
-    public function __construct(
-        EventDispatcherInterface $dispatcher,
-        IndexManager $indexManager,
-        PagerProviderRegistry $pagerProviderRegistry,
-        PagerPersisterRegistry $pagerPersisterRegistry,
-        Resetter $resetter
-    ) {
-        parent::__construct();
-
-        $this->dispatcher = $dispatcher;
-        $this->indexManager = $indexManager;
-        $this->pagerProviderRegistry = $pagerProviderRegistry;
-        $this->pagerPersisterRegistry = $pagerPersisterRegistry;
-        $this->resetter = $resetter;
-    }
-
+    /**
+     * {@inheritdoc}
+     */
     protected function configure()
     {
         $this
@@ -94,7 +78,9 @@ class PopulateCommand extends Command
             ->addOption('type', null, InputOption::VALUE_OPTIONAL, 'The type to repopulate')
             ->addOption('no-reset', null, InputOption::VALUE_NONE, 'Do not reset index before populating')
             ->addOption('no-delete', null, InputOption::VALUE_NONE, 'Do not delete index after populate')
+            ->addOption('offset', null, InputOption::VALUE_REQUIRED, '[DEPRECATED] Start indexing at offset', 0)
             ->addOption('sleep', null, InputOption::VALUE_REQUIRED, 'Sleep time between persisting iterations (microseconds)', 0)
+            ->addOption('batch-size', null, InputOption::VALUE_REQUIRED, '[DEPRECATED] Index packet size (overrides provider config option)')
             ->addOption('ignore-errors', null, InputOption::VALUE_NONE, 'Do not stop on errors')
             ->addOption('no-overwrite-format', null, InputOption::VALUE_NONE, 'Prevent this command from overwriting ProgressBar\'s formats')
 
@@ -107,11 +93,22 @@ class PopulateCommand extends Command
         ;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     protected function initialize(InputInterface $input, OutputInterface $output)
     {
-        $this->pagerPersister = $this->pagerPersisterRegistry->getPagerPersister($input->getOption('pager-persister'));
+        $this->dispatcher = $this->getContainer()->get('event_dispatcher');
+        $this->indexManager = $this->getContainer()->get('fos_elastica.index_manager');
+        $this->pagerProviderRegistry = $this->getContainer()->get('fos_elastica.pager_provider_registry');
+        $this->resetter = $this->getContainer()->get('fos_elastica.resetter');
+        $this->progressClosureBuilder = new ProgressClosureBuilder();
 
-        if (!$input->getOption('no-overwrite-format')) {
+        /** @var PagerPersisterRegistry $pagerPersisterRegistry */
+        $pagerPersisterRegistry = $this->getContainer()->get('fos_elastica.pager_persister_registry');
+        $this->pagerPersister = $pagerPersisterRegistry->getPagerPersister($input->getOption('pager-persister'));
+
+        if (!$input->getOption('no-overwrite-format') && class_exists('Symfony\\Component\\Console\\Helper\\ProgressBar')) {
             ProgressBar::setFormatDefinition('normal', " %current%/%max% [%bar%] %percent:3s%%\n%message%");
             ProgressBar::setFormatDefinition('verbose', " %current%/%max% [%bar%] %percent:3s%% %elapsed:6s%\n%message%");
             ProgressBar::setFormatDefinition('very_verbose', " %current%/%max% [%bar%] %percent:3s%% %elapsed:6s%/%estimated:-6s%\n%message%");
@@ -119,6 +116,9 @@ class PopulateCommand extends Command
         }
     }
 
+    /**
+     * {@inheritdoc}
+     */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
         $index = $input->getOption('index');
@@ -130,6 +130,7 @@ class PopulateCommand extends Command
             'delete' => $delete,
             'reset' => $reset,
             'ignore_errors' => $input->getOption('ignore-errors'),
+            'offset' => $input->getOption('offset'),
             'sleep' => $input->getOption('sleep'),
             'first_page' => $input->getOption('first-page'),
             'max_per_page' => $input->getOption('max-per-page'),
@@ -139,7 +140,11 @@ class PopulateCommand extends Command
             $options['last_page'] = $input->getOption('last-page');
         }
 
-        if ($input->isInteractive() && $reset && 1 < $options['first_page']) {
+        if ($input->getOption('batch-size')) {
+            $options['batch_size'] = (int) $input->getOption('batch-size');
+        }
+
+        if ($input->isInteractive() && $reset && $input->getOption('offset')) {
             /** @var QuestionHelper $dialog */
             $dialog = $this->getHelperSet()->get('question');
             if (!$dialog->ask($input, $output, new Question('<question>You chose to reset the index and start indexing with an offset. Do you really want to do that?</question>'))) {
@@ -191,7 +196,7 @@ class PopulateCommand extends Command
 
         $this->dispatcher->dispatch(IndexPopulateEvent::POST_INDEX_POPULATE, $event);
 
-        $this->refreshIndex($output, $index);
+        $this->refreshIndex($output, $index, $reset);
     }
 
     /**
@@ -213,33 +218,35 @@ class PopulateCommand extends Command
             $this->resetter->resetIndexType($index, $type);
         }
 
-        $offset = 1 < $options['first_page'] ? ($options['first_page'] - 1) * $options['max_per_page'] : 0;
-        $loggerClosure = ProgressClosureBuilder::build($output, 'Populating', $index, $type, $offset);
+        $offset = $options['offset'];
+        $loggerClosure = $this->progressClosureBuilder->build($output, 'Populating', $index, $type, $offset);
 
-        $this->dispatcher->addListener(
-            Events::ON_EXCEPTION,
-            function(OnExceptionEvent $event) use ($loggerClosure) {
-                $loggerClosure(
-                    count($event->getObjects()),
-                    $event->getPager()->getNbResults(),
-                    sprintf('<error>%s</error>', $event->getException()->getMessage())
-                );
-            }
-        );
+        if ($loggerClosure) {
+            $this->dispatcher->addListener(
+                Events::ON_EXCEPTION,
+                function(OnExceptionEvent $event) use ($loggerClosure, $options) {
+                    $loggerClosure(
+                        $options['batch_size'],
+                        count($event->getObjects()),
+                        sprintf('<error>%s</error>', $event->getException()->getMessage())
+                    );
+                }
+            );
 
-        $this->dispatcher->addListener(
-            Events::POST_INSERT_OBJECTS,
-            function(PostInsertObjectsEvent $event) use ($loggerClosure) {
-                $loggerClosure(count($event->getObjects()), $event->getPager()->getNbResults());
-            }
-        );
+            $this->dispatcher->addListener(
+                Events::POST_INSERT_OBJECTS,
+                function(PostInsertObjectsEvent $event) use ($loggerClosure) {
+                    $loggerClosure(count($event->getObjects()), $event->getPager()->getNbResults());
+                }
+            );
 
-        $this->dispatcher->addListener(
-            Events::POST_ASYNC_INSERT_OBJECTS,
-            function(PostAsyncInsertObjectsEvent $event) use ($loggerClosure) {
-                $loggerClosure($event->getObjectsCount(), $event->getPager()->getNbResults(), $event->getErrorMessage());
-            }
-        );
+            $this->dispatcher->addListener(
+                Events::POST_ASYNC_INSERT_OBJECTS,
+                function(PostAsyncInsertObjectsEvent $event) use ($loggerClosure) {
+                    $loggerClosure($event->getObjectsCount(), $event->getPager()->getNbResults(), $event->getErrorMessage());
+                }
+            );
+        }
 
         if ($options['ignore_errors']) {
             $this->dispatcher->addListener(Events::ON_EXCEPTION, function(OnExceptionEvent $event) {

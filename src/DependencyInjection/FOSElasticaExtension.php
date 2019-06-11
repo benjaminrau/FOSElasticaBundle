@@ -11,12 +11,10 @@
 
 namespace FOS\ElasticaBundle\DependencyInjection;
 
-use FOS\ElasticaBundle\Elastica\Client;
-use FOS\ElasticaBundle\Manager\RepositoryManagerInterface;
 use Symfony\Component\Config\FileLocator;
-use Symfony\Component\DependencyInjection\ChildDefinition;
 use Symfony\Component\DependencyInjection\ContainerAwareInterface;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
+use Symfony\Component\DependencyInjection\DefinitionDecorator;
 use Symfony\Component\DependencyInjection\Loader\XmlFileLoader;
 use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\HttpKernel\DependencyInjection\Extension;
@@ -57,7 +55,7 @@ class FOSElasticaExtension extends Extension
             return;
         }
 
-        foreach (['config', 'index', 'persister', 'provider', 'source', 'transformer', 'event_listener', 'commands'] as $basename) {
+        foreach (['config', 'index', 'persister', 'provider', 'source', 'transformer', 'event_listener'] as $basename) {
             $loader->load(sprintf('%s.xml', $basename));
         }
 
@@ -79,13 +77,9 @@ class FOSElasticaExtension extends Extension
 
         $this->loadClients($config['clients'], $container);
         $container->setAlias('fos_elastica.client', sprintf('fos_elastica.client.%s', $config['default_client']));
-        $container->getAlias('fos_elastica.client')->setPublic(true);
-        $container->setAlias(Client::class, 'fos_elastica.client');
-        $container->getAlias(Client::class)->setPublic(false);
 
         $this->loadIndexes($config['indexes'], $container);
         $container->setAlias('fos_elastica.index', sprintf('fos_elastica.index.%s', $config['default_index']));
-        $container->getAlias('fos_elastica.index')->setPublic(true);
         $container->setParameter('fos_elastica.default_index', $config['default_index']);
 
         $container->getDefinition('fos_elastica.config_source.container')->replaceArgument(0, $this->indexConfigs);
@@ -119,7 +113,7 @@ class FOSElasticaExtension extends Extension
         foreach ($clients as $name => $clientConfig) {
             $clientId = sprintf('fos_elastica.client.%s', $name);
 
-            $clientDef = new ChildDefinition('fos_elastica.client_prototype');
+            $clientDef = new DefinitionDecorator('fos_elastica.client_prototype');
             $clientDef->replaceArgument(0, $clientConfig);
 
             $logger = $clientConfig['connections'][0]['logger'];
@@ -156,7 +150,7 @@ class FOSElasticaExtension extends Extension
             $indexId = sprintf('fos_elastica.index.%s', $name);
             $indexName = isset($index['index_name']) ? $index['index_name'] : $name;
 
-            $indexDef = new ChildDefinition('fos_elastica.index_prototype');
+            $indexDef = new DefinitionDecorator('fos_elastica.index_prototype');
             $indexDef->setFactory([new Reference('fos_elastica.client'), 'getIndex']);
             $indexDef->replaceArgument(0, $indexName);
             $indexDef->addTag('fos_elastica.index', [
@@ -207,11 +201,11 @@ class FOSElasticaExtension extends Extension
          * an index and type names were "collection" and an index, respectively.
          */
         $transformerId = sprintf('fos_elastica.elastica_to_model_transformer.collection.%s', $name);
-        $transformerDef = new ChildDefinition('fos_elastica.elastica_to_model_transformer.collection');
+        $transformerDef = new DefinitionDecorator('fos_elastica.elastica_to_model_transformer.collection');
         $container->setDefinition($transformerId, $transformerDef);
 
         $finderId = sprintf('fos_elastica.finder.%s', $name);
-        $finderDef = new ChildDefinition('fos_elastica.finder');
+        $finderDef = new DefinitionDecorator('fos_elastica.finder');
         $finderDef->replaceArgument(0, $index);
         $finderDef->replaceArgument(1, new Reference($transformerId));
 
@@ -232,7 +226,7 @@ class FOSElasticaExtension extends Extension
             $indexName = $indexConfig['name'];
 
             $typeId = sprintf('%s.%s', $indexConfig['reference'], $name);
-            $typeDef = new ChildDefinition('fos_elastica.type_prototype');
+            $typeDef = new DefinitionDecorator('fos_elastica.type_prototype');
             $typeDef->setFactory([$indexConfig['reference'], 'getType']);
             $typeDef->replaceArgument(0, $name);
 
@@ -287,12 +281,12 @@ class FOSElasticaExtension extends Extension
             }
 
             if (isset($type['indexable_callback'])) {
-                $indexableCallbacks[sprintf('%s/%s', $indexName, $name)] = $this->buildCallback($type['indexable_callback'], $name);
+                $indexableCallbacks[sprintf('%s/%s', $indexName, $name)] = $type['indexable_callback'];
             }
 
             if ($container->hasDefinition('fos_elastica.serializer_callback_prototype')) {
                 $typeSerializerId = sprintf('%s.serializer.callback', $typeId);
-                $typeSerializerDef = new ChildDefinition('fos_elastica.serializer_callback_prototype');
+                $typeSerializerDef = new DefinitionDecorator('fos_elastica.serializer_callback_prototype');
 
                 if (isset($type['serializer']['groups'])) {
                     $typeSerializerDef->addMethodCall('setGroups', [$type['serializer']['groups']]);
@@ -310,37 +304,6 @@ class FOSElasticaExtension extends Extension
                 $container->setDefinition($typeSerializerId, $typeSerializerDef);
             }
         }
-    }
-
-    private function buildCallback($indexCallback, $typeName)
-    {
-        if (is_array($indexCallback)) {
-            if (!isset($indexCallback[0])) {
-                throw new \InvalidArgumentException(sprintf('Invalid indexable_callback for type %s'), $typeName);
-            }
-
-            $classOrServiceRef = $this->transformServiceReference($indexCallback[0]);
-            if ($classOrServiceRef instanceof Reference && !isset($indexCallback[1])) {
-                return $classOrServiceRef; // __invoke
-            }
-
-            if (!isset($indexCallback[1])) {
-                throw new \InvalidArgumentException(sprintf('Invalid indexable_callback for type %s'), $typeName);
-            }
-
-            return [$classOrServiceRef, $indexCallback[1]];
-        };
-
-        if (is_string($indexCallback)) {
-            return $this->transformServiceReference($indexCallback);
-        }
-
-        throw new \InvalidArgumentException(sprintf('Invalid indexable_callback for type %s'), $typeName);
-    }
-
-    private function transformServiceReference($classOrService)
-    {
-        return 0 === strpos($classOrService, '@') ? new Reference(substr($classOrService, 1)) : $classOrService;
     }
 
     /**
@@ -368,7 +331,7 @@ class FOSElasticaExtension extends Extension
         if (isset($typeConfig['finder'])) {
             $this->loadTypeFinder($typeConfig, $container, $elasticaToModelTransformerId, $typeRef, $indexName, $typeName);
         }
-        if (isset($typeConfig['listener']) && $typeConfig['listener']['enabled']) {
+        if (isset($typeConfig['listener'])) {
             $this->loadTypeListener($typeConfig, $container, $objectPersisterId, $indexName, $typeName);
         }
     }
@@ -394,11 +357,14 @@ class FOSElasticaExtension extends Extension
          */
         $abstractId = sprintf('fos_elastica.elastica_to_model_transformer.prototype.%s', $typeConfig['driver']);
         $serviceId = sprintf('fos_elastica.elastica_to_model_transformer.%s.%s', $indexName, $typeName);
-        $serviceDef = new ChildDefinition($abstractId);
+        $serviceDef = new DefinitionDecorator($abstractId);
         $serviceDef->addTag('fos_elastica.elastica_to_model_transformer', ['type' => $typeName, 'index' => $indexName]);
 
-        $serviceDef->replaceArgument(1, $typeConfig['model']);
-        $serviceDef->replaceArgument(2, array_merge($typeConfig['elastica_to_model_transformer'], [
+        // Doctrine has a mandatory service as first argument
+        $argPos = ('propel' === $typeConfig['driver']) ? 0 : 1;
+
+        $serviceDef->replaceArgument($argPos, $typeConfig['model']);
+        $serviceDef->replaceArgument($argPos + 1, array_merge($typeConfig['elastica_to_model_transformer'], [
             'identifier' => $typeConfig['identifier'],
         ]));
         $container->setDefinition($serviceId, $serviceDef);
@@ -427,7 +393,7 @@ class FOSElasticaExtension extends Extension
             'fos_elastica.model_to_elastica_transformer';
 
         $serviceId = sprintf('fos_elastica.model_to_elastica_transformer.%s.%s', $indexName, $typeName);
-        $serviceDef = new ChildDefinition($abstractId);
+        $serviceDef = new DefinitionDecorator($abstractId);
         $serviceDef->replaceArgument(0, [
             'identifier' => $typeConfig['identifier'],
         ]);
@@ -475,7 +441,7 @@ class FOSElasticaExtension extends Extension
         }
 
         $serviceId = sprintf('fos_elastica.object_persister.%s.%s', $indexName, $typeName);
-        $serviceDef = new ChildDefinition($abstractId);
+        $serviceDef = new DefinitionDecorator($abstractId);
         foreach ($arguments as $i => $argument) {
             $serviceDef->replaceArgument($i, $argument);
         }
@@ -510,21 +476,27 @@ class FOSElasticaExtension extends Extension
 
         switch ($driver) {
             case 'orm':
-                $providerDef = new ChildDefinition('fos_elastica.pager_provider.prototype.'.$driver);
+                $providerDef = new DefinitionDecorator('fos_elastica.pager_provider.prototype.'.$driver);
                 $providerDef->replaceArgument(2, $typeConfig['model']);
                 $providerDef->replaceArgument(3, $baseConfig);
 
                 break;
             case 'mongodb':
-                $providerDef = new ChildDefinition('fos_elastica.pager_provider.prototype.'.$driver);
+                $providerDef = new DefinitionDecorator('fos_elastica.pager_provider.prototype.'.$driver);
                 $providerDef->replaceArgument(2, $typeConfig['model']);
                 $providerDef->replaceArgument(3, $baseConfig);
 
                 break;
             case 'phpcr':
-                $providerDef = new ChildDefinition('fos_elastica.pager_provider.prototype.'.$driver);
+                $providerDef = new DefinitionDecorator('fos_elastica.pager_provider.prototype.'.$driver);
                 $providerDef->replaceArgument(2, $typeConfig['model']);
                 $providerDef->replaceArgument(3, $baseConfig);
+
+                break;
+            case 'propel':
+                $providerDef = new DefinitionDecorator('fos_elastica.pager_provider.prototype.'.$driver);
+                $providerDef->replaceArgument(0, $typeConfig['model']);
+                $providerDef->replaceArgument(1, $baseConfig);
 
                 break;
             default:
@@ -564,7 +536,7 @@ class FOSElasticaExtension extends Extension
          */
         $abstractListenerId = sprintf('fos_elastica.listener.prototype.%s', $typeConfig['driver']);
         $listenerId = sprintf('fos_elastica.listener.%s.%s', $indexName, $typeName);
-        $listenerDef = new ChildDefinition($abstractListenerId);
+        $listenerDef = new DefinitionDecorator($abstractListenerId);
         $listenerDef->replaceArgument(0, new Reference($objectPersisterId));
         $listenerDef->replaceArgument(3, $typeConfig['listener']['logger'] ?
             new Reference($typeConfig['listener']['logger']) :
@@ -669,7 +641,7 @@ class FOSElasticaExtension extends Extension
             $finderId = $typeConfig['finder']['service'];
         } else {
             $finderId = sprintf('fos_elastica.finder.%s.%s', $indexName, $typeName);
-            $finderDef = new ChildDefinition('fos_elastica.finder');
+            $finderDef = new DefinitionDecorator('fos_elastica.finder');
             $finderDef->replaceArgument(0, $typeRef);
             $finderDef->replaceArgument(1, new Reference($elasticaToModelId));
             $container->setDefinition($finderId, $finderDef);
@@ -762,9 +734,6 @@ class FOSElasticaExtension extends Extension
         }
 
         $container->setAlias('fos_elastica.manager', sprintf('fos_elastica.manager.%s', $defaultManagerService));
-        $container->getAlias('fos_elastica.manager')->setPublic(true);
-        $container->setAlias(RepositoryManagerInterface::class, 'fos_elastica.manager');
-        $container->getAlias(RepositoryManagerInterface::class)->setPublic(false);
     }
 
     /**

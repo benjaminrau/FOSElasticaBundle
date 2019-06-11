@@ -9,7 +9,7 @@
  * file that was distributed with this source code.
  */
 
-namespace FOS\ElasticaBundle\Tests\Unit\Command;
+namespace FOS\ElasticaBundle\Tests\Command;
 
 use FOS\ElasticaBundle\Command\CreateCommand;
 use FOS\ElasticaBundle\Configuration\ConfigManager;
@@ -18,14 +18,14 @@ use FOS\ElasticaBundle\Elastica\Index;
 use FOS\ElasticaBundle\Index\AliasProcessor;
 use FOS\ElasticaBundle\Index\IndexManager;
 use FOS\ElasticaBundle\Index\MappingBuilder;
-use PHPUnit\Framework\TestCase;
-use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\DependencyInjection\Container;
 
 /**
+ * Create command test.
+ *
  * @author Oleg Andreyev <oleg.andreyev@intexsys.lv>
  */
-class CreateCommandTest extends TestCase
+class CreateCommandTest extends \PHPUnit_Framework_TestCase
 {
     /**
      * @var IndexManager|\PHPUnit_Framework_MockObject_MockObject
@@ -53,36 +53,58 @@ class CreateCommandTest extends TestCase
     private $command;
 
     /**
-     * @var IndexConfig|\PHPUnit_Framework_MockObject_MockObject
+     * @var IndexConfig
      */
     private $indexConfig;
 
     /**
-     * @var Index|\PHPUnit_Framework_MockObject_MockObject
+     * @var Index
      */
     private $index;
 
-    protected function setUp()
+    /**
+     * {@inheritdoc}
+     */
+    public function setup()
     {
-        $this->indexManager = $this->createMock(IndexManager::class);
-        $this->mappingBuilder = $this->createMock(MappingBuilder::class);
-        $this->configManager = $this->createMock(ConfigManager::class);
-        $this->aliasProcessor = $this->createMock(AliasProcessor::class);
-        $this->indexConfig = $this->createMock(IndexConfig::class);
-        $this->index = $this->createMock(Index::class);
+        $container = new Container();
+        $this->indexManager = $this->getMockBuilder('\FOS\ElasticaBundle\Index\IndexManager')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $this->mappingBuilder = $this->getMockBuilder('FOS\ElasticaBundle\Index\MappingBuilder')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $this->configManager = $this->getMockBuilder('FOS\ElasticaBundle\Configuration\ConfigManager')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $this->aliasProcessor = $this->getMockBuilder('FOS\ElasticaBundle\Index\AliasProcessor')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $this->indexConfig = $this->getMockBuilder('\FOS\ElasticaBundle\Configuration\IndexConfig')
+            ->disableOriginalConstructor()
+            ->getMock();
+        $this->index = $this->getMockBuilder('\FOS\ElasticaBundle\Elastica\Index')
+            ->disableOriginalConstructor()
+            ->getMock();
 
-        $this->command = new CreateCommand(
-            $this->indexManager,
-            $this->mappingBuilder,
-            $this->configManager,
-            $this->aliasProcessor
-        );
+        $container->set('fos_elastica.index_manager', $this->indexManager);
+        $container->set('fos_elastica.mapping_builder', $this->mappingBuilder);
+        $container->set('fos_elastica.config_manager', $this->configManager);
+        $container->set('fos_elastica.alias_processor', $this->aliasProcessor);
+
+        $this->command = new CreateCommand();
+        $this->command->setContainer($container);
     }
 
+    /**
+     * Test execute with index provided and with alias.
+     *
+     * @return void
+     */
     public function testExecuteWithIndexProvidedAndWithAlias()
     {
-        $input = $this->createMock(InputInterface::class);
-        $output = $this->createMock(OutputInterface::class);
+        $input = $this->getMockForAbstractClass('\Symfony\Component\Console\Input\InputInterface');
+        $output = $this->getMockForAbstractClass('\Symfony\Component\Console\Output\OutputInterface');
 
         $indexName = 'foo';
         $mapping = ['mapping'];
@@ -99,10 +121,15 @@ class CreateCommandTest extends TestCase
         $this->command->run($input, $output);
     }
 
+    /**
+     * Test execute with index provided and without alias.
+     *
+     * @return void
+     */
     public function testExecuteWithIndexProvidedAndWithoutAlias()
     {
-        $input = $this->createMock(InputInterface::class);
-        $output = $this->createMock(OutputInterface::class);
+        $input = $this->getMockForAbstractClass('\Symfony\Component\Console\Input\InputInterface');
+        $output = $this->getMockForAbstractClass('\Symfony\Component\Console\Output\OutputInterface');
 
         $indexName = 'foo';
         $mapping = ['mapping'];
@@ -121,8 +148,8 @@ class CreateCommandTest extends TestCase
 
     public function testExecuteAllIndices()
     {
-        $input = $this->createMock(InputInterface::class);
-        $output = $this->createMock(OutputInterface::class);
+        $input = $this->getMockForAbstractClass('\Symfony\Component\Console\Input\InputInterface');
+        $output = $this->getMockForAbstractClass('\Symfony\Component\Console\Output\OutputInterface');
         $indexConfig1 = clone $this->indexConfig;
         $indexConfig2 = clone $this->indexConfig;
         $index1 = clone $this->index;

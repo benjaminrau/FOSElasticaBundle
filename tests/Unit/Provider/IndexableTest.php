@@ -25,9 +25,23 @@ use PHPUnit\Framework\TestCase;
 
 class IndexableTest extends TestCase
 {
+    public $container;
+
+    protected function setUp()
+    {
+        $this->container = $this->getMockBuilder('Symfony\\Component\\DependencyInjection\\ContainerInterface')
+            ->getMock();
+
+        $this->container->expects($this->any())
+            ->method('get')
+            ->with('indexableService')
+            ->will($this->returnValue(new IndexableDecider()));
+    }
+
     public function testIndexableUnknown()
     {
         $indexable = new Indexable([]);
+        $indexable->setContainer($this->container);
         $index = $indexable->isObjectIndexable('index', 'type', new Entity());
 
         $this->assertTrue($index);
@@ -41,6 +55,7 @@ class IndexableTest extends TestCase
         $indexable = new Indexable([
             'index/type' => $callback,
         ]);
+        $indexable->setContainer($this->container);
         $index = $indexable->isObjectIndexable('index', 'type', new Entity());
 
         $this->assertSame($return, $index);
@@ -55,6 +70,7 @@ class IndexableTest extends TestCase
         $indexable = new Indexable([
             'index/type' => $callback,
         ]);
+        $indexable->setContainer($this->container);
         $indexable->isObjectIndexable('index', 'type', new Entity());
     }
 
@@ -62,6 +78,7 @@ class IndexableTest extends TestCase
     {
         return [
             ['nonexistentEntityMethod'],
+            [['@indexableService', 'internalMethod']],
             [[new IndexableDecider(), 'internalMethod']],
             [42],
             ['entity.getIsIndexable() && nonexistentEntityFunction()'],
@@ -73,7 +90,8 @@ class IndexableTest extends TestCase
         return [
             ['isIndexable', false],
             [[new IndexableDecider(), 'isIndexable'], true],
-            [new IndexableDecider(), true],
+            [['@indexableService', 'isIndexable'], true],
+            [['@indexableService'], true],
             [function (Entity $entity) {
                 return $entity->maybeIndex();
             }, true],
